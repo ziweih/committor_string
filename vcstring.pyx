@@ -1,3 +1,17 @@
+# Source code for implementing the Committor-Consistent Variational String Method (CCVSM)
+# Version 1.0
+# Roux Group, The University of Chicago
+# Author: Ziwei He
+# Date: September 1, 2022
+#
+# For publication about the development and application of this method, please refer to:
+# Z. He, C. Chipot, B. Roux, J. Phys. Chem. Lett. 13, 9263–9271 (2022).
+# doi: 10.1021/acs.jpclett.2c02529
+
+"""
+Implement the committor-consistent variational string method from trajectories.
+"""
+
 import sys
 import math
 import numpy as np
@@ -18,7 +32,68 @@ cdef class vcstring:
     cdef double ra_A, rb_A, ra_B, rb_B, alpha_deg_A, alpha_deg_B, alpha_A, alpha_B, x0_A, y0_A, x0_B, y0_B
 
     def __init__(self, str state_assignment, int num_basis, cut_A=None, cut_B=None, theta_deg=None, cut=None, ra_A=None, rb_A=None, ra_B=None, rb_B=None, alpha_deg_A=None, alpha_deg_B=None, x0_A=None, y0_A=None, x0_B=None, y0_B=None):
-        """Basis set parameters"""
+        """Define basis set
+
+        Parameters
+        ----------
+        state_assignment : str
+            How to assign end states, A and B, and the intermediate state given a set 
+            of collective variables. '1d' is for the 1-dimensional space, 'ellipse' bounds the 
+            end states in ellipsoids, 'orthogonal_projection' defines end state boundaries based
+            on an orthogonal projection of a straight line with respect to the x-axis.
+
+        num_basis: int
+            Number of basis functions
+
+        cut_A : float, default=None
+            Cut off value in collective variable space for state A in the 1-dimensional space.
+            Must be defined when state_assignment == '1d'
+
+        cut_B : float, default=None
+            Cut off value in collective variable space for state B in the 1-dimensional space.
+            Must be defined when state_assignment == '1d'
+
+        theta_deg : float, default=None
+            defines angle of rotation of reaction coordinate with respect to the x-axis in degrees,
+            must be defined when state_assignment == 'orthogonal_projection'
+
+        cut : float, default=None
+            defines cutoff value along straight path reaction coordinate
+            must be defined when state_assignment == 'orthogonal_projection
+
+        ra_A : float, default=None
+            major axis of the ellipse that gives the state A boundary,
+            must be defined when state_assignment == 'ellipse'
+
+        rb_A : float, default=None
+            minor axis of the ellipse that gives the state A boundary,
+            must be defined when state_assignment == 'ellipse'
+
+        ra_B : float, default=None
+            major axis of the ellipse that gives the state B boundary,
+            must be defined when state_assignment == 'ellipse'
+
+        rb_B : float, default=None
+            minor axis of the ellipse that gives the state B boundary,
+            must be defined when state_assignment == 'ellipse'
+
+        alpha_deg_A : float, default=None
+            degree of rotation of state A ellipse,
+            must be defined when state_assignment == 'ellipse'
+
+        alpha_deg_B : float, default=None
+            degree of rotation of state B ellipse, 
+            must be defined when state_assignment == 'ellipse'
+
+        x0_A, y0_A: float, default=None
+            Ellipse of state A centered at position (x0_A, y0_A),
+            must be defined when state_assignment == 'ellipse'
+
+        x0_B, y0_B : float, default=None
+            Ellipse of state B centered at position (x0_B, y0_B),
+            must be defined when state_assignment == 'ellipse'
+        
+        """
         self.num_basis = num_basis  # Number of basis functions
         self.state_assignment = state_assignment
         if state_assignment == '1d':  # for 1-dimensional colvars
@@ -43,14 +118,28 @@ cdef class vcstring:
             self.cut = cut  # Intermediate region cutoff along RC when theta = 0i
 
     cpdef intermediate_region(self):
-        """Intermediate region bounds when theta is nonzero."""
+        """Define intermediate region bounds for a given theta angle and cut off value.
+        
+        Returns
+        -------
+        xa : float, boundary of state A
+
+        xb : float, boundary of state B
+        
+        """
         cdef double xa, xb
         xa = ((tan(self.theta + pi/2) - 1) * self.cut) / (tan(self.theta) - tan(self.theta + pi/2))
         xb = ((-tan(self.theta + pi/2) + 1) * self.cut) / (tan(self.theta) - tan(self.theta + pi/2))
         return xa, xb
 
     cpdef centroids(self):
-        """Define centroid positions of the basis functions."""
+        """Returns the position of images along a straight reaction coordinate
+        
+        Returns
+        -------
+        z : ndarray of shape (num_basis, 2)
+
+        """
         cdef double xa, xb
         cdef np.ndarray[DTYPE_t, ndim=1] xcenters, ycenters
         cdef np.ndarray[DTYPE_t, ndim=2] z
@@ -63,7 +152,27 @@ cdef class vcstring:
 
     cpdef assign_states(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z):
         """
-        Assign points to Voronoi cells
+        Assignment to Voronoi cells. For a single trajectory.
+
+        Parameters
+        ----------
+        traj : list of trajectory with shape (T, d),
+            where T is the number of time steps and d is the number of dimensions
+
+        tau : int
+            lag time step
+
+        z : ndarray(T, 2)
+            image positions
+
+        Returns
+        -------
+        ids : ndarray(T, V)
+            where T is the number of time steps corresponding to the trajectory and V is the 
+            number of columns depending on the state_assignment type. 
+            If state_assignment == '1d' the columns are [h_I, h_B, nc, x_t].
+            If state_assignment == 'orthogonal_projection', columns are [h_I, h_B, nc, x_t, y_t].
+            If state_assignment == 'ellipse', columns are [h_I, h_B, nc, x_t, y_t, ell_tA, ell_tB].
         """
         cdef double xa, xb
         cdef double ra_A, rb_A, alpha_A, x0_A, y0_A, ell_tA, ell_tauA
@@ -160,7 +269,37 @@ cdef class vcstring:
 
     cpdef assign_states_ensemble(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, int t0=0, list weights=None, stride=None):
         """
-        Assign points to Voronoi cells for ensemble of aggregate trajectories.
+        Assign points to Voronoi cells for an ensemble of aggregate trajectories.
+
+        Parameters
+        ----------
+        traj : list of trajectory with shape (T, d),
+            where T is the number of time steps and d is the number of dimensions
+
+        tau : int
+            lag time step
+
+        z : ndarray(T, 2)
+            image positions
+
+        t0 : int, default=0
+            smeow
+
+        weights : optional, default=None
+            weight of each trajectory
+
+        stride : optional, default=None
+            use every stride-th frame of a trajectory. Cuts down the volume of data, for speed up.
+
+        Returns
+        -------
+        ids : ndarray(T, V)
+            where T is the number of time steps corresponding to the trajectory and V is the
+            number of columns depending on the state_assignment type.
+            If state_assignment == '1d' the columns are [h_I0, h_B0, h_Itau, h_Btau, nc_t, nc_tau, x_t, x_tau, weights.
+            If state_assignment == 'orthogonal_projection' the columns are [h_I0, h_B0, h_Itau, h_Btau, nc_t, nc_tau, x_t, y_t, x_tau, y_tau, weights]
+            If state_assignment == 'ellipse' the columns are [h_I0, h_B0, h_Itau, h_Btau, nc_t, nc_tau, x_t, y_t, x_tau, y_tau, weights, ell_tA, ell_tB] 
+
         """
         cdef double xa, xb
         cdef double ra_A, rb_A, alpha_A, x0_A, y0_A, ell_tA, ell_tauA
@@ -271,7 +410,7 @@ cdef class vcstring:
             # h_I0(0), h_B(0), h_I0(tau), h_B(tau), Voronoi index, x(0), y(0), x(tau), y(tau)
             if self.state_assignment == '1d':
                 ids.append([h_I0, h_B0, h_Itau, h_Btau, nc_t, nc_tau, x_t, x_tau, weights[count]])
-            elif self.state_assignment == 'orthogonal_proj_t, nc_tauection':
+            elif self.state_assignment == 'orthogonal_projection':
                 ids.append([h_I0, h_B0, h_Itau, h_Btau, nc_t, nc_tau, x_t, y_t, x_tau, y_tau, weights[count]])
             elif self.state_assignment == 'ellipse':
                 ids.append([h_I0, h_B0, h_Itau, h_Btau, nc_t, nc_tau, x_t, y_t, x_tau, y_tau, weights[count], ell_tA, ell_tB]) 
@@ -285,19 +424,47 @@ cdef class vcstring:
     
     cpdef calc_coeffs(self, int N, int tau, np.ndarray[DTYPE_t, ndim=2] z, np.ndarray[DTYPE_t, ndim=2] ids, symmetric=True):
         """
-        Solve the linear equation from minimizing the forward steady-state flux.
-        Calculates D matrices, g vectors, and b coefficients.
+        Solves the linear equation from minimizing the forward steady-state flux:
+        (D(tau) - D(0)) b = g(0) - g(tau)
+        Best implemented for a single, well sampled trajectory.
 
         Parameters
         ----------
-        traj :  trajectory with shape (T, d), where T is number of time steps and d is dimensions.
-        tau  :  lag time (units step)
+        N : int
+            number of frames in trajectory
 
-        Returns:
-        --------
-        - Symmetric square Matrices D_0_sym and D_tau_sym
-        - Vectors g_0 and g_tau
-        - A vector of the coefficients b for the trial committor expressed as a basis set expansion
+        tau : int
+            lag time steps
+
+        z : ndarray(M, 2)
+            M image positions on a string
+
+        ids : ndarray(T, V)
+            Voronoi index assignment to discrete basis functions, where T is the number of time
+            steps and V are columns with assignment details
+
+        symmetric : bool, default=True
+            enforces matrix symmetry, 
+            for symmetric systems, e.g., a symmetric double well
+
+        Returns
+        -------
+        b : 1D array of length M
+            Coefficients from solving the linear equation. 
+            This gives the trial committor probabilities corresponding to the images of z.
+
+        D_0_arr : ndarray(M, M)
+            Square D matrix at time 0
+
+        D_tau_arr : ndarray(M, M)
+            Square D matrix at time tau
+
+        g_0_arr : 1D array of length M
+            vector g at time 0
+
+        g_tau_arr : 1D array of length M
+            vector g at time tau
+            
         """
         cdef int i, j, t
         # cdef np.ndarray[DTYPE_t, ndim=1] h_I0, h_Itau, h_B0, h_Btau, centroid
@@ -381,27 +548,48 @@ cdef class vcstring:
 
     cpdef calc_coeffs_accelerated(self, int image, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z):
         """
-        Solve the linear equation from minimizing the forward steady-state flux.
-        Calculates D matrices, g vectors, and b coefficients.
-        Accelerated method only calculates the rows/column elements of the affected image and its
-        nearest neighboring images.
+        Accelerated method to solve the linear equation from minimizing the forward steady-state flux:
+        (D(tau) - D(0)) b = g(0) - g(tau)
+        Best implemented for a single, well sampled trajectory. 
+        This accelerated method calculates only the rows/column elements of the affected image 
+        and its nearest neighboring images.
 
-        WARNING: THIS METHOD IS NOT RECOMMENDED FOR MOST CASES BECAUSE MOVING THE IMAGES 
+        WARNING: THIS METHOD IS NOT RECOMMENDED FOR MOST CASES. MOVING THE IMAGES 
         MORE THAN A CERTAIN AMOUNT CAN AFFECT THE VORONOI TESSELATION IN FARTHER OUT IMAGES 
         OTHER THAN THE NEAREST NEIGHBORS.
 
         Parameters
         ----------
-        image    :  index of image, starting from 0
-        traj :  trajectory with shape (T, d), where T is number of time steps and d is dimensions.
-        tau  :  lag time (units step)
-        z    :  input centroid positions
+        image : int
+            index of image on strong
 
-        Returns:
-        --------
-        - Symmetric square Matrices D_0_sym and D_tau_sym
-        - Vectors g_0 and g_tau
-        - A vector of the coefficients b for the trial committor expressed as a basis set expansion
+        traj : list
+            trajectory of length T time steps
+
+        tau : int
+            lag time steps
+
+        z : ndarray(M, 2)
+            M image positions on a string
+
+        Returns
+        -------
+        b : 1D array of length M
+            Coefficients from solving the linear equation.
+            This gives the trial committor probabilities corresponding to the images of z.
+
+        D_0_arr : ndarray(M, M)
+            Square D matrix at time 0
+
+        D_tau_arr : ndarray(M, M)
+            Square D matrix at time tau
+
+        g_0_arr : 1D array of length M
+            vector g at time 0
+
+        g_tau_arr : 1D array of length M
+            vector g at time tau
+
         """
         cdef double xa, xb
         cdef np.ndarray[DTYPE_t, ndim=1] xcenters, ycenters
@@ -548,19 +736,49 @@ cdef class vcstring:
 
     cpdef calc_coeffs_ensemble(self, int N, int tau, np.ndarray[DTYPE_t, ndim=2] z, np.ndarray[DTYPE_t, ndim=2] ids, symmetric=True):
         """
-        Solve the linear equation from minimizing the forward steady-state flux.
-        Calculates D matrices, g vectors, and b coefficients.
+        Solves the linear equation from minimizing the forward steady-state flux:
+        (D(tau) - D(0)) b = g(0) - g(tau)
+        Must use this method for an ensemble of trajectories - this is particularly useful 
+        for trajectories from enhanced sampling simulations.
+
 
         Parameters
         ----------
-        traj :  trajectory with shape (T, d), where T is number of time steps and d is dimensions.
-        tau  :  lag time (units step)
+        N : int
+            number of independent trajectories
 
-        Returns:
-        --------
-        - Symmetric square Matrices D_0_sym and D_tau_sym
-        - Vectors g_0 and g_tau
-        - A vector of the coefficients b for the trial committor expressed as a basis set expansion
+        tau : int
+            lag time steps
+
+        z : ndarray(M, 2)
+            M image positions on a string
+
+        ids : ndarray(T, V)
+            Voronoi index assignment to discrete basis functions, where T is the number of time
+            steps and V are columns with assignment details
+
+        symmetric : bool, default=True
+            enforces matrix symmetry,
+            for symmetric systems, e.g., a symmetric double well
+
+        Returns
+        -------
+        b : 1D array of length M
+            Coefficients from solving the linear equation.
+            This gives the trial committor probabilities corresponding to the images of z.
+
+        D_0_arr : ndarray(M, M)
+            Square D matrix at time 0
+
+        D_tau_arr : ndarray(M, M)
+            Square D matrix at time tau
+
+        g_0_arr : 1D array of length M
+            vector g at time 0
+
+        g_tau_arr : 1D array of length M
+            vector g at time tau
+
         """
         cdef int i, j, t
         # cdef np.ndarray[DTYPE_t, ndim=1] h_I0, h_Itau, h_B0, h_Btau, centroid
@@ -649,19 +867,49 @@ cdef class vcstring:
 
     cpdef calc_coeffs_ensemble_timeavg(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, list weights=None, t_final=None, symmetric=True):
         """
-        Solve the linear equation from minimizing the forward steady-state flux.
-        Calculates D matrices, g vectors, and b coefficients.
+        Solves the linear equation from minimizing the forward steady-state flux
+        (D(tau) - D(0)) b = g(0) - g(tau)
+        using the time average of an ensemble of trajectories.
 
         Parameters
         ----------
-        traj :  trajectory with shape (T, d), where T is number of time steps and d is dimensions.
-        tau  :  lag time (units step)
+        traj : list of arrays or ndarrays
+            trajectory in the collective variable space
 
-        Returns:
-        --------
-        - Symmetric square Matrices D_0_sym and D_tau_sym
-        - Vectors g_0 and g_tau
-        - A vector of the coefficients b for the trial committor expressed as a basis set expansion
+        tau : int
+            lag time steps
+
+        z : ndarray(M, 2)
+            M image positions on a string
+
+        weight : list, optional, default=None
+            assigns a weight for each independent trajectory
+
+        t_final : int, optional, default=None
+            final time step in trajectory, use this to truncate the trajectory
+
+        symmetric : bool, default=True
+            enforces matrix symmetry,
+            for symmetric systems, e.g., a symmetric double well
+ 
+        Returns
+        -------
+        b : 1D array of length M
+            Coefficients from solving the linear equation.
+            This gives the trial committor probabilities corresponding to the images of z.
+
+        D_0_arr : ndarray(M, M)
+            Square D matrix at time 0
+
+        D_tau_arr : ndarray(M, M)
+            Square D matrix at time tau
+
+        g_0_arr : 1D array of length M
+            vector g at time 0
+
+        g_tau_arr : 1D array of length M
+            vector g at time tau
+
         """
         cdef int i, j, count, t0, t
         cdef np.ndarray[DTYPE_t, ndim=1] centroid
@@ -763,19 +1011,49 @@ cdef class vcstring:
 
     cpdef calc_coeffs_ensemble_timeavg_fast(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, list weights=None, symmetric=True):
         """
-        Solve the linear equation from minimizing the forward steady-state flux.
-        Calculates D matrices, g vectors, and b coefficients.
+        Solves the linear equation from minimizing the forward steady-state flux
+        (D(tau) - D(0)) b = g(0) - g(tau)
+        using the time average of an ensemble of trajectories.
 
         Parameters
         ----------
-        traj :  trajectory with shape (T, d), where T is number of time steps and d is dimensions.
-        tau  :  lag time (units step)
+        traj : list of arrays or ndarrays
+            trajectory in the collective variable space
 
-        Returns:
-        --------
-        - Symmetric square Matrices D_0_sym and D_tau_sym
-        - Vectors g_0 and g_tau
-        - A vector of the coefficients b for the trial committor expressed as a basis set expansion
+        tau : int
+            lag time steps
+
+        z : ndarray(M, 2)
+            M image positions on a string
+
+        weight : list, optional, default=None
+            assigns a weight for each independent trajectory
+
+        t_final : int, optional, default=None
+            final time step in trajectory, use this to truncate the trajectory
+
+        symmetric : bool, default=True
+            enforces matrix symmetry,
+            for symmetric systems, e.g., a symmetric double well
+
+        Returns
+        -------
+        b : 1D array of length M
+            Coefficients from solving the linear equation.
+            This gives the trial committor probabilities corresponding to the images of z.
+
+        D_0_arr : ndarray(M, M)
+            Square D matrix at time 0
+
+        D_tau_arr : ndarray(M, M)
+            Square D matrix at time tau
+
+        g_0_arr : 1D array of length M
+            vector g at time 0
+
+        g_tau_arr : 1D array of length M
+            vector g at time tau
+
         """
         cdef int i, j, count, t0, t
         cdef np.ndarray[DTYPE_t, ndim=1] centroid
@@ -868,98 +1146,39 @@ cdef class vcstring:
         return b, D_0_arr, D_tau_arr, g_0_arr, g_tau_arr
 
 
-    cpdef calc_coeffs_ensemble_timeavg_fast_v2(self, int N, list last_frames, int tau, np.ndarray[DTYPE_t, ndim=2] z, np.ndarray[DTYPE_t, ndim=2] ids, list weights=None, symmetric=True):
-        cdef int i, j, count, t
-        cdef list x, y, D_0, D_tau, g_0, g_tau
-        cdef double val_g_0, val_g_tau, val_D_0, val_D_tau, weight
-        cdef double f_i0, f_itau, f_j, h_I0, h_B0, h_Itau, h_Btau
-        cdef np.ndarray[DTYPE_t, ndim=2] D_0_arr, D_tau_arr, D_0_sym, D_tau_sym, D
-        cdef np.ndarray[DTYPE_t, ndim=1] g_0_arr, g_tau_arr, g, b
-
-        print('\n======================================')
-        print('SOLVING LINEAR BASIS SET COEFFICIENTS')
-        print('======================================')
-        print('lag time =', tau)
-        print('Symmetrization of D matrices:', symmetric)
-
-        if weights == None:
-            print('Using uniform weights')
-            weights = [1.] * len(ids)
-
-        D_0 = []
-        D_tau = []
-        g_0 = []
-        g_tau = []
-        for i in range(self.num_basis):
-            val_g_0, val_g_tau = 0.0, 0.0
-            for j in range(self.num_basis):
-                print("Matrix elements", i, j)
-                sys.stdout.flush()
-                val_D_0, val_D_tau = 0.0, 0.0
-                count = 0
-
-                for t in range(len(ids)):
-                    weight = weights[t]
-                    if t in last_frames:
-                        # print('Skipping last frame:', t, '\n')
-                        continue
-                    # print('frame:', t)
-                    f_i0, f_itau, f_j = 0.0, 0.0, 0.0
-                    h_I0 = ids[t][0]
-                    h_Itau = ids[t + tau][0]
-                    h_B0 = ids[t][1]
-                    h_Btau = ids[t + tau][1]
-                    if ids[t][2] == i:
-                        f_i0 = 1.0
-                    if ids[t + tau][2] == i:
-                        f_itau = 1.0
-                    if ids[t][2] == j:
-                        f_j = 1.0
-
-                    # Summation of terms
-                    val_D_0 += h_I0 * h_I0 * f_i0 * f_j * weight
-                    val_D_tau += h_Itau * h_I0 * f_itau * f_j * weight
-                    if j == 0:
-                        val_g_0 += (h_I0 * f_i0 * h_B0) + (h_B0 * h_I0 * f_i0) * weight
-                        val_g_tau += (h_Itau * f_itau * h_B0) + (h_Btau * h_I0 * f_i0) * weight
-                    count += 1
-
-                # Divide by data size
-                D_0.append(val_D_0 / count)
-                D_tau.append(val_D_tau / count)
-            g_0.append(val_g_0 / count)
-            g_tau.append(val_g_tau / count)
-
-        # Reshape into appropriate matrix size
-        D_0_arr = np.asarray(D_0).reshape(self.num_basis, self.num_basis)
-        D_tau_arr = np.asarray(D_tau).reshape(self.num_basis, self.num_basis)
-        g_0_arr = np.asarray(g_0) # .reshape(self.num_basis)
-        g_tau_arr = np.asarray(g_tau)# .reshape(self.num_basis)
-        print('D_0 =', D_0_arr)
-        print('D_tau =', D_tau_arr)
-        print('g_0 =', g_0_arr)
-        print('g_tau =', g_tau_arr)
-
-        # Symmetrize for reversible dynamics
-        if symmetric == True:
-            D_0_arr = 0.5 * (D_0_arr + D_0_arr.T)
-            D_tau_arr = 0.5 * (D_tau_arr + D_tau_arr.T)
-            print('Symmetric D_0 =', D_0_arr)
-            print('Symmetric D_tau =', D_tau_arr)
-
-        # Calculate committor coefficients, b
-        D = D_0_arr - D_tau_arr
-        g = g_tau_arr - g_0_arr
-        b = 0.5 * np.linalg.inv(D).dot(g)
-        print('b =', b)
-
-        return b, D_0_arr, D_tau_arr, g_0_arr, g_tau_arr
-
-
     cpdef calc_corr(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=1] b, np.ndarray[DTYPE_t, ndim=2] D_0, np.ndarray[DTYPE_t, ndim=2] D_tau, np.ndarray[DTYPE_t, ndim=1] g_0, np.ndarray[DTYPE_t, ndim=1] g_tau):
-        """Get correlation function as a function of sigma.
+        """
+        Compute the committor time-correlation function from the matrix elements:
         <r(0)r(0) - r(0)r(t)> = b.T[D(0)-D(tau)]b + [g(0)-g(tau)]b + <hB(0)hB(0)> - <hB(tau)hB(0)>,
         where D is an NxN matrix, b is a column vector, and b.T and g are row vectors.
+        
+        Parameters
+        ----------
+        b : 1D array
+            Committor probabilities corresponding to images on string
+
+        D_0 : ndarray(M, M)
+            Square D matrix at time 0
+
+        D_tau : ndarray(M, M)
+            Square D matrix at time tau
+
+        g_0 : 1D array of length M
+            vector g at time 0
+
+        g_tau : 1D array of length M
+            vector g at time tau
+
+        Returns
+        -------
+        C : float
+            committor time-correlation function
+
+        Notes
+        -----
+        This returns a C that is 1/2 the value as from calculating using only the b's
+        e.g., calc_corr_q2 method computes C = <[b(t+tau) - b(t)] ** 2> at time t and t+tau
+        
         """
         cdef double xa, xb, rx, ry, alpha, x0_A, y0_A, x0_B, y0_B, ell_tB, ell_tauB
         cdef list x, y
@@ -1032,7 +1251,36 @@ cdef class vcstring:
 
     cpdef calc_corr_q2(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=1] b, np.ndarray[DTYPE_t, ndim=2] ids):
         """
-        Compute correlation function using committor at time t and t+tau, <[q(tau)-q(0)] ** 2>.
+        Compute committor time-correlation function using trial committor at time t and t+tau:
+        <[b(tau)-b(0)] ** 2>.
+
+        Parameters
+        ----------
+        b : 1D array
+            Committor probabilities corresponding to images on string
+
+        D_0 : ndarray(M, M)
+            Square D matrix at time 0
+
+        D_tau : ndarray(M, M)
+            Square D matrix at time tau
+
+        g_0 : 1D array of length M
+            vector g at time 0
+
+        g_tau : 1D array of length M
+            vector g at time tau
+
+        Returns
+        -------
+        C : float
+            committor time-correlation function
+
+        Notes
+        -----
+        This returns a C that is 2x the value as from calculating using only the b's
+        e.g., calc_corr_q2 method computes C = <[b(t+tau) - b(t)] ** 2> at time t and t+tau
+
         """
         cdef list x, y
         cdef int N, t, id_vor_t, id_vor_tau
@@ -1075,7 +1323,34 @@ cdef class vcstring:
 
     cpdef calc_corr_q2_ensemble(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=1] b, np.ndarray[DTYPE_t, ndim=2] ids):
         """
-        Compute correlation function using committor at time t and t+tau, <[q(tau)-q(0)] ** 2>.
+        Compute committor time-correlation function using trial committor at time t and t+tau:
+        <[b(tau)-b(0)] ** 2>. 
+        Use this when working with aggregate trajectories.
+
+        Parameters
+        ----------
+        traj : list
+            list of array of trajectories with shape (T, d) for T time steps and d dimensions
+
+        tau : int
+            lag time step
+
+        b : 1D array
+            Committor probabilities corresponding to images on string
+
+        ids : ndarray(T, V)
+            array of Voronoi assignments for each trajectory time step
+
+        Returns
+        -------
+        C : float
+            committor time-correlation function
+
+        Notes
+        -----
+        This returns a C that is 2x the value as from calculating using only the b's
+        e.g., calc_corr_q2 method computes C = <[b(t+tau) - b(t)] ** 2> at time t and t+tau
+
         """
         cdef list x, y
         cdef int N, t, id_vor_t, id_vor_tau
@@ -1128,7 +1403,37 @@ cdef class vcstring:
 
     cpdef calc_corr_q2_ensemble_timeavg(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, np.ndarray[DTYPE_t, ndim=1] b, list weights=None):
         """
-        Compute correlation function using committor at time t and t+tau, <[q(tau)-q(0)] ** 2>.
+        Compute a time-averaged committor time-correlation function using a 
+        trial committor at time t and t+tau:
+        <[b(tau)-b(0)] ** 2>.
+        Use this method when working with aggregate trajectories.
+
+        Parameters
+        ----------
+        traj : list
+            list of array of trajectories with shape (T, d) for T time steps and d dimensions
+
+        tau : int
+            lag time step
+
+        z : ndarray(M, 2)
+            M image positions on string
+
+        b : 1D array
+            Committor probabilities corresponding to images on string
+
+        weights : list, optional, default=None
+            assign a weight for each trajectory in traj
+
+        Returns
+        -------
+        C : float
+            committor time-correlation function
+
+        Notes
+        -----
+        This returns a C that is 2x the value as from calculating using only the b's
+        e.g., calc_corr_q2 method computes C = <[b(t+tau) - b(t)] ** 2> at time t and t+tau
         """
         cdef list x, y
         cdef np.ndarray[DTYPE_t, ndim=2] ids
@@ -1192,7 +1497,38 @@ cdef class vcstring:
 
     cpdef calc_corr_q2_ensemble_timeavg_fast(self, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, np.ndarray[DTYPE_t, ndim=1] b, list weights=None):
         """
-        Compute correlation function using committor at time t and t+tau, <[q(tau)-q(0)] ** 2>.
+        Compute a time-averaged committor time-correlation function using a
+        trial committor at time t and t+tau:
+        <[b(tau)-b(0)] ** 2>.
+        Use this method when working with aggregate trajectories.
+
+        Parameters
+        ----------
+        traj : list
+            list of array of trajectories with shape (T, d) for T time steps and d dimensions
+
+        tau : int
+            lag time step
+
+        z : ndarray(M, 2)
+            M image positions on string
+
+        b : 1D array
+            Committor probabilities corresponding to images on string
+
+        weights : list, optional, default=None
+            assign a weight for each trajectory in traj
+
+        Returns
+        -------
+        C : float
+            committor time-correlation function
+
+        Notes
+        -----
+        This returns a C that is 2x the value as from calculating using only the b's
+        e.g., calc_corr_q2 method computes C = <[b(t+tau) - b(t)] ** 2> at time t and t+tau
+        
         """
         cdef list x, y
         cdef np.ndarray[DTYPE_t, ndim=2] ids
@@ -1248,24 +1584,44 @@ cdef class vcstring:
 
     cpdef finite_diff_corr(self, int image, int dim, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, np.ndarray[DTYPE_t, ndim=2] ids, double delta=0.1):
         """
-        Calculate the finite difference gradient of the committor correlation function.
-        A central finite difference is computed here.
+        Finite difference to compute the gradient of the committor correlation function.
+        A central finite difference is used here.
     
         Parameters:
         -----------
-        N  :  dimension of the state space. E.g., N=2 can be described by (x,y) coordinates
-        M  :  number of images on the Voronoi string
-        traj : trajectory
-        delta : Step change in the Voronoi centroid position, default = 0.01
-        mode  : 'full' computes the full finite difference derivative (default), 'plus' computes the 
-                 positive change in correlation, 'min' computes the negative change in correlation.
-        save  : specifies whether to save results as numpy file. 
-                'coeffs' saves results from calc_coeffs(),
-                'fd' saves correlation and gradient information. 
-                'all' saves all results. Default='all'
+        image : int
+            index of image on string
 
-        Return:
+        dim : int
+            number of dimensions in collective variable space
+
+        traj : list
+            trajectory with shape (T, d) for T time steps and d dimensions
+
+        tau : int
+            lag time steps
+
+        z : ndarray(M, 2)
+            M image positions
+
+        ids : ndarray(T, V)
+            Voronoi assignment at each trajectory time step. Columns are defined according to the
+            state_assignment
+
+        delta : float, default=0.1
+            move position by a value of delta
+
+        Returns
         -------
+        Cp_list : list
+            correlation value of z+ + delta
+
+        Cm_list : list
+            correlation value of z+ - delta
+
+        gradC_list : list
+            gradient of C 
+            
         """
         cdef np.ndarray[DTYPE_t, ndim=2] zm, zp
         cdef list Cp_list, Cm_list, gradC_list
@@ -1326,7 +1682,44 @@ cdef class vcstring:
         return Cp_list, Cm_list, gradC_list
 
     cpdef finite_diff_committor(self, np.ndarray[DTYPE_t, ndim=2] z, np.ndarray[DTYPE_t, ndim=1] b, list start, double delta=0.1, double epsilon=1.0):
-        """Finite difference to get the gradient of the committor"""
+        """
+        Finite difference to compute the gradient of the committor. 
+        A central finite difference is used here.
+        
+        Parameters:
+        -----------
+        z : ndarray(M, 2)
+            M image positions
+
+        b : 1d array of shape (M,)
+            committor corresponding to z
+
+        start : list
+            starting position
+
+        delta : float, default=0.1
+            move position by a value of delta
+
+        epsilon : float, default=1.0
+            moves z by a multiple of grad q. Specifices how much to change z.
+
+        Returns
+        -------
+        dq_list : list
+            gradient of q
+
+        z[id_new] : list
+            image position on string z that is closest to position given by start
+        
+        b[id_new] : list
+            committor for specified image
+
+        Note
+        ----
+        This is an alternative to the Monte Carlo-based methods below. 
+        Not recommended for most cases.
+            
+        """
         cdef np.ndarray[DTYPE_t, ndim=1] dist, dist_p, dist_m, dist_new
         cdef np.ndarray[DTYPE_t, ndim=2] zp, zm
         cdef int id_start, i, id_p, id_m, id_new
@@ -1363,26 +1756,93 @@ cdef class vcstring:
         # print('b[id_new] =', b[id_new])
         return dq_list, z[id_new], b[id_new]
         
-    cpdef montecarlo(self, list images, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, double target, double delta=0.01, int n=100, ensemble_timeavg_v1=False, ensemble_timeavg_v2=False, ensemble_avg=False, stride=None, list weights=None, symmetric=True, manual=False, hx_man=None, hy_man=None, reparm=True, mindist_constraint=False, mindist=0.25, accelerated=False, corr_method='matrix_elements', save=True):
+    cpdef montecarlo(self, list images, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, double target, double delta=0.01, int n=100, ensemble_timeavg_v1=False, ensemble_timeavg_v2=False, ensemble_avg=False, stride=None, list weights=None, symmetric=True, manual=False, hx_man=None, hy_man=None, reparm=True, mindist_constraint=False, double mindist=0.25, accelerated=False, corr_method='matrix_elements', save=True):
         """
-        Monte Carlo accept/reject of correlation given a target value.
+        Monte Carlo (MC) accept-reject to variationally minimize the
+        committor time-correlation function.
 
         Parameters:
         -----------
-        images : List of indices of the images on the Voronoi string
-        traj   : trajectory
-        z      : Voronoi centroid positions
-        target : Value to compare for acceptance or rejection
-        delta  : Step change in the Voronoi centroid position, default = 0.01
-        n      : How many MC steps to perform to find an accepted value. Should be divisible 
-                 by self.num_basis to include all images on the string in each MC iteration. 
-                 Default = 100.
-        accelerated  :  Specifies which method to solve the linear equations for b, D, g.
-        save   : Specifies whether to save results as numpy file. Default = True.
+        images : list
+            indices of the images on the string z
 
-        Return:
+        traj : list
+            trajectory or list of array of trajectories with shape (T, d)
+
+        tau : int
+            lag time step
+
+        z : ndarray(M, 2)
+            M image positions on the string
+
+        target : float
+            upper value of the committor time-correlation function. We seek to minimize this or 
+            the Monte Carlo move is rejected
+
+        delta : float, default=0.01
+            move the current image in z by a value of delta
+
+        n : int, default=100
+            how many MC moves to perform to find an accepted value
+
+        ensemble_timeavg_v1 : bool, default=False
+            computes results using time averages for an ensemble of trajectories,
+            best for a handful of long independent trajectories
+
+        ensemble_timeavg_v2 : bool, default=False
+            computes results using time averages for an ensemble of trajectories,
+            best for a high number of very short independent trajectories
+            
+        ensemble_avg : bool, default=False
+            computes results for an ensemble of trajectories
+
+        stride : int, optional, default=None
+            use every stride-th frame of the trajectory 
+
+        weights : list, optional, default=None
+            assign weight to each trajectory in an ensemble
+
+        symmetric : bool, default=True
+            ensures symmetrized matrices when solving for the committor, only use for
+            symmetric systems, e.g., a symmetric double well potential
+
+        manual : bool, optional, default=False
+            manual=True to allow specifying hx_man and hy_man. Use to test random sampling.
+
+        hx_man, hy_man : bool, optional, default=None
+            move position of image from z by a value of hx_man in the x-direction and 
+            by a value of hy_man in the y-direction
+
+        reparm : bool, default=True
+            reparametrization such that the images are equidistant from each
+            other on the string. This ensures that the images do not pool within
+            the well basins over the course of the string optimization.
+
+        mindist_constraint : bool, default=False
+            enable this to check the distance between neighboring beads at each MC step
+
+        mindist : float, default=0.25
+            constraint for minimimum distance between images, must also set mindist_constraint=True
+            to use this feature
+
+        accelerated : bool, default=False
+            specifies whether to use the accerlated computation to solve for the trial committor b
+            and matrices/vectors D and g. Generally NOT recommended to enable this - can give 
+            unstable results depending on the system
+
+        save : bool, default=True
+            specifies whether to save the computed results in files in an output/ directory.
+            NOTE: must make an /output directory in the current path.
+
+        Returns
         -------
-        Returns the updated position of z upon acceptance
+        if save=True, then the following files are written to a directory named output/:
+            mc.txt gives [hx, hy, Cnew, z[i][0], z[i][1]].
+            z_new.txt gives the new image position if the MC move was accepted
+            C_new.txt gives the lower correlation function value if the MC move was accepted
+            q_new.txt gives the new set of trial committors if the MC move was accepted
+            coeffs_new.npz saves the b as well as the D matrices and g vectors
+
         """
         cdef list MC_list
         cdef int it, i, N, k
@@ -1503,7 +1963,7 @@ cdef class vcstring:
                         print('\nb from ensemble time average =', b)
                         print('Corr from ensemble time average =', Cnew, '\n')
 
-                    # Ensemble time average (best for a lot of short aggregate trajectories)
+                    # Ensemble time average (best for a lot of SHORT aggregate trajectories)
                     elif ensemble_timeavg_v2 == True:
                         print('\n================================')
                         print('ENSEMBLE TIME AVERAGE - method 2')
@@ -1573,29 +2033,78 @@ cdef class vcstring:
 
         return
 
-    cpdef montecarlo_symmetric(self, list images, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, double target, double delta=0.01, int n=100, manual=False, hx_man=None, hy_man=None, reparm=True, mindist_constraint=False, mindist=0.25, accelerated=False, corr_method='matrix_elements', save=True):
+    cpdef montecarlo_symmetric(self, list images, list traj, int tau, np.ndarray[DTYPE_t, ndim=2] z, double target, double delta=0.01, int n=100, manual=False, hx_man=None, hy_man=None, reparm=True, mindist_constraint=False, mindist=0.25, accelerated=False, corr_method='q2', save=True):
         """
-        For systems that are symmetric about some axis of rotation. 
-        Monte Carlo accept/reject of correlation given a target value. 
-        For each image position updated, the image on the opposite side will also be updated 
-        by -hx, -hy.
+        Speed up for systems that are symmetric about an axis of rotation. 
+        Monte Carlo (MC) accept-reject to variationally minimize the
+        committor time-correlation function.
 
-        Parameters:
-        -----------
-        images : List of indices of the images on the Voronoi string
-        traj   : trajectory
-        z      : Voronoi centroid positions
-        target : Value to compare for acceptance or rejection
-        delta  : Step change in the Voronoi centroid position, default = 0.01
-        n      : How many MC steps to perform to find an accepted value. Should be divisible
-                 by self.num_basis to include all images on the string in each MC iteration.
-                 Default = 100.
-        accelerated  :  Specifies which method to solve the linear equations for b, D, g.
-        save   : Specifies whether to save results as numpy file. Default = True.
+        Parameters
+        ----------
+        images : list
+            indices of the images on the string z
 
-        Return:
+        traj : list
+            trajectory or list of array of trajectories with shape (T, d)
+
+        tau : int
+            lag time step
+
+        z : ndarray(M, 2)
+            M image positions on the string
+
+        target : float
+            upper value of the committor time-correlation function. We seek to minimize this or
+            the Monte Carlo move is rejected
+
+        delta : float, default=0.01
+            move the current image in z by a value of delta
+
+        n : int, default=100
+            how many MC moves to perform to find an accepted value
+
+        manual : bool, optional, default=False
+            manual=True to allow specifying hx_man and hy_man. Use to test random sampling.
+
+        hx_man, hy_man : bool, optional, default=None
+            move position of image from z by a value of hx_man in the x-direction and
+            by a value of hy_man in the y-direction
+
+        reparm : bool, default=True
+            reparametrization such that the images are equidistant from each
+            other on the string. This ensures that the images do not pool within
+            the well basins over the course of the string optimization.
+
+        mindist_constraint : bool, default=False
+            enable this to check the distance between neighboring beads at each MC step
+
+        mindist : float, default=0.25
+            constraint for minimimum distance between images, must also set mindist_constraint=True
+            to use this feature
+
+        accelerated : bool, default=False
+            specifies whether to use the accerlated computation to solve for the trial committor b
+            and matrices/vectors D and g. Generally NOT recommended to enable this - can give
+            unstable results depending on the system
+
+        corr_method : str, 'matrix_elements' or 'q2', default='q2'
+            specifies how to compute the committor-correlation function, C.
+            'matrix_elements' computes C using the matrix elements from the linear equation.
+            'q2' computes C by <[q(t+tau) - q(t)] ** 2> for a trial committor q at time t and t+tau.
+
+        save : bool, default=True
+            specifies whether to save the computed results in files in an output/ directory.
+            NOTE: must make an /output directory in the current path.
+
+        Returns
         -------
-        Returns the updated position of z upon acceptance
+        if save=True, then the following files are written to a directory named output/:
+            mc.txt gives [hx, hy, Cnew, z[i][0], z[i][1]].
+            z_new.txt gives the new image position if the MC move was accepted
+            C_new.txt gives the lower correlation function value if the MC move was accepted
+            q_new.txt gives the new set of trial committors if the MC move was accepted
+            coeffs_new.npz saves the b as well as the D matrices and g vectors
+
         """
         cdef list MC_list
         cdef int it, i, ii
@@ -1720,6 +2229,22 @@ cdef class vcstring:
         return
 
 cpdef reparm_string(np.ndarray[DTYPE_t, ndim=2] z):
+    """
+    Reparametrization procedure for the string method to ensure equal distances
+    between the images. This prevents the images from clumping at the well basins
+    over the course of the string optimization.
+
+    Parameter
+    ---------
+    z : ndarray(M, 2)
+        M image positions of a string
+
+    Returns
+    -------
+    z_new_arr : ndarray(M, 2)
+        M image positions of the reparametrized string
+
+    """
     cdef np.ndarray[DTYPE_t, ndim=1] x, y, dist_im, pos
     cdef np.ndarray[long, ndim=1] where
     cdef np.ndarray[DTYPE_t, ndim=2] grad, M, arr
@@ -1804,26 +2329,104 @@ cpdef reparm_string(np.ndarray[DTYPE_t, ndim=2] z):
 
 cpdef elliptical_bounds_params(double ra=1.0, double rb=0.4, double alpha=58.0, double x0_A=-2.2, double y0_A=-2.2, double x0_B=2.2, double y0_B=2.2):
     """
-    Parameters for defining the  elliptical boundaries at the well minima where the
+    **DEPRECATED**
+    Parameters for defining the elliptical boundaries at the well minima where the
     committor q = 0 or q = 1, respectively.
-    Defaults:
-    ra = 2.05 # Major radius along x-axis, ra > rb
-    rb = 0.8  # Minor radius along y-axis
-    alpha = 58 * pi / 180.0  # Rotation of ellipse
-    x0_A = -2.2  # Center of ellipse for state A
-    y0_A = -2.2
-    x0_B = 2.2   # Center of ellipse for state B
-    y0_B = 2.2
+
+    Parameters
+    ----------
+    ra : float, default=1.0
+        major radius along x-axis, ra > rb
+    
+    rb : float, default=0.4 
+        minor radius along y-axis
+
+    alpha : float, default=58
+        rotation of ellipse in degrees
+
+    x0_A : float, default=-2.2
+        x coordinate for center of ellipse for state A
+
+    y0_A : float, default=-2.2
+        y coordinate for center of ellipse for state A
+
+    x0_B : float, default=2.2
+        x coordinate for center of ellipse for state B
+
+    y0_B : float, default=2.2
+        y coordinate for center of ellipse for state B
+
+    Returns
+    -------
+    ra, rb, alpha*pi/180.0, x0_A, y0_A, x0_B, y0_B
     """
+    print('This method elliptical_bounds_params is deprecated')
     return ra, rb, alpha*pi/180.0, x0_A, y0_A, x0_B, y0_B
 
 def elliptical(double a, double b, double alpha, double x0, double y0, xp, yp):
+    """
+    Given a position (xp, yp), return the value with respect to the ellipse.
+    Value greater or equal to 1: position is on or inside ellipse.
+    Value less than 1: position is outside of the ellipse.
+
+    Parameters
+    ----------
+    a : float
+        major radius along x-axis
+
+    b : float
+        minor radius along y-axis
+
+    alpha : float
+        rotation of ellipse in degrees
+
+    x0, y0 : floats
+        position of the center of ellipse
+
+    xp, yp : floats
+        given (x, y) coordinate inputs
+
+    Returns
+    -------
+    ell : float
+        value used to test position of (xp, yp) with respect to the ellipse
+
+    """
     ell_x = ((math.cos(alpha) * (xp - x0) + math.sin(alpha) * (yp - y0)) ** 2) / (a ** 2)
     ell_y = ((math.sin(alpha) * (xp - x0) - math.cos(alpha) * (yp - y0)) ** 2) / (b ** 2)
     ell = ell_x + ell_y
     return ell
 
 def smoothing(C_list, q_list, lags, first=10, last=10, cut=0):
+    """
+    Smoothing algorithm to reduce the noise of a dataset over a range of lag times
+
+    Parameters
+    ----------
+    C_list : list
+        list of committor time-correlation functions over lag times
+
+    q_list : list
+        list of committor probabilities over lag times
+
+    first : int, default=10
+        smoothing using 10 previous elements
+
+    last : int, default=10
+        smoothing using 10 later elements
+
+    cut : int, default=0
+        index at which to begin the smoothing process
+
+    Returns
+    -------
+    C_avg : 1d array of shape (t,)
+        for t lag times
+
+    q_avg : ndarray(t, M)
+        for t lag times and M images on string
+
+    """
     C_avg = []
     q_avg = []
     for i in range(len(lags)):
